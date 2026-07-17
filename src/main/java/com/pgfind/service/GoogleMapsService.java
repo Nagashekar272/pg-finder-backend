@@ -447,16 +447,19 @@ public class GoogleMapsService {
         return pool[rnd.nextInt(pool.length)];
     }
 
-    /** Overpass QL query — searches guest_house, hostel, lodging within radius */
+    /** Overpass QL query — searches guest_house, hostel, lodging, and named PGs within radius */
     private String buildOverpassQuery(double lat, double lon) {
         String around = "(around:" + SEARCH_RADIUS_M + "," + lat + "," + lon + ")";
         return "[out:json][timeout:30];\n(\n" +
                "  node[\"amenity\"=\"guest_house\"]" + around + ";\n" +
+               "  node[\"amenity\"=\"hostel\"]"      + around + ";\n" +
                "  node[\"tourism\"=\"hostel\"]"       + around + ";\n" +
                "  node[\"amenity\"=\"lodging\"]"      + around + ";\n" +
-               "  node[\"tourism\"=\"hotel\"][\"name\"~\"PG|Paying Guest|Hostel|Coliving\",i]" + around + ";\n" +
+               "  node[\"name\"~\"PG|Paying Guest|Hostel|Coliving|Gents PG|Ladies PG|Boys PG|Girls PG\",i]" + around + ";\n" +
                "  way[\"amenity\"=\"guest_house\"]"   + around + ";\n" +
+               "  way[\"amenity\"=\"hostel\"]"        + around + ";\n" +
                "  way[\"tourism\"=\"hostel\"]"        + around + ";\n" +
+               "  way[\"name\"~\"PG|Paying Guest|Hostel|Coliving|Gents PG|Ladies PG|Boys PG|Girls PG\",i]" + around + ";\n" +
                ");\nout tags center;";
     }
 
