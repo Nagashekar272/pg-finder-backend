@@ -1,7 +1,0 @@
-com\pgfind\PgFindApplication.class
-com\pgfind\service\FirebaseService.class
-com\pgfind\model\Pg.class
-com\pgfind\service\FirebaseService$1.class
-com\pgfind\config\DataSeeder.class
-com\pgfind\controller\PgController.class
-com\pgfind\config\WebConfig.class
