@@ -40,35 +40,44 @@ public class PgController {
         log.info("Received request to fetch PGs. Filters - City: {}, Area: {}, Type: {}, MaxPrice: {}, Amenities: {}", 
                 city, area, type, maxPrice, amenities);
         
-        // Trigger automatic sync if city and area are present and no real PGs exist for this area in Firebase
-        if (city != null && !city.isBlank() && area != null && !area.isBlank()) {
+        final String cleanCity = (city != null) ? city.trim() : "";
+        final String cleanArea = (area != null) ? area.trim() : "";
+        final String cleanType = (type != null) ? type.trim() : "";
+
+        // Trigger automatic sync if city and area are present and no synced PGs exist for this area in Firebase
+        if (!cleanCity.isBlank() && !cleanArea.isBlank()) {
             try {
                 List<Pg> currentPgs = firebaseService.getAllPgs();
-                boolean hasRealPgs = currentPgs.stream()
-                        .filter(p -> city.equalsIgnoreCase(p.getCity()) && area.equalsIgnoreCase(p.getArea()))
-                        .anyMatch(p -> p.getPlaceId() != null 
-                                && !p.getPlaceId().startsWith("seed-initial-") 
-                                && !p.getPlaceId().startsWith("osm-mock-"));
+                boolean hasSyncedPgs = currentPgs.stream()
+                        .filter(p -> p.getCity() != null && cleanCity.equalsIgnoreCase(p.getCity()))
+                        .anyMatch(p -> p.getArea() != null && p.getArea().toLowerCase().contains(cleanArea.toLowerCase()));
                 
-                if (!hasRealPgs) {
-                    log.info("No real PGs found in database for {}, {}. Triggering automatic sync...", area, city);
-                    List<Pg> synced = googleMapsService.searchAndSyncPgs(city, area);
+                if (!hasSyncedPgs) {
+                    log.info("Fetching real PGs via API for {}, {} and persisting to Firebase database...", cleanArea, cleanCity);
+                    List<Pg> synced = googleMapsService.searchAndSyncPgs(cleanCity, cleanArea);
                     if (synced != null && !synced.isEmpty()) {
-                        firebaseService.syncGoogleMapsPgs(synced);
+                        int addedCount = firebaseService.syncGoogleMapsPgs(synced);
+                        log.info("Persisted {} new PGs to Firebase database", addedCount);
                     }
                 }
             } catch (Exception e) {
-                log.error("Automatic sync failed for {}, {}: {}", area, city, e.getMessage());
+                log.error("Automatic sync failed for {}, {}: {}", cleanArea, cleanCity, e.getMessage());
             }
         }
         
         List<Pg> pgs = firebaseService.getAllPgs();
         
-        // Filter dynamically
+        // Filter dynamically (preserving BOTH premium and normal PGs)
         List<Pg> filtered = pgs.stream()
-                .filter(pg -> city == null || city.isBlank() || city.equalsIgnoreCase(pg.getCity()))
-                .filter(pg -> area == null || area.isBlank() || area.equalsIgnoreCase(pg.getArea()))
-                .filter(pg -> type == null || type.isBlank() || type.equalsIgnoreCase(pg.getPgType()))
+                .filter(pg -> cleanCity.isBlank() || (pg.getCity() != null && pg.getCity().equalsIgnoreCase(cleanCity)))
+                .filter(pg -> {
+                    if (cleanArea.isBlank()) return true;
+                    if (pg.getArea() == null) return false;
+                    String pgAreaL = pg.getArea().toLowerCase();
+                    String reqAreaL = cleanArea.toLowerCase();
+                    return pgAreaL.contains(reqAreaL) || reqAreaL.contains(pgAreaL);
+                })
+                .filter(pg -> cleanType.isBlank() || (pg.getPgType() != null && pg.getPgType().equalsIgnoreCase(cleanType)))
                 .filter(pg -> maxPrice == null || (pg.getStartingPrice() != null && pg.getStartingPrice() <= maxPrice))
                 .filter(pg -> {
                     if (amenities == null || amenities.isEmpty()) {
@@ -78,35 +87,18 @@ public class PgController {
                         return false;
                     }
                     List<String> pgAmenitiesLower = pg.getAmenities().stream()
+                            .map(String::trim)
                             .map(String::toLowerCase)
                             .collect(Collectors.toList());
                     return amenities.stream()
+                            .map(String::trim)
                             .map(String::toLowerCase)
                             .allMatch(pgAmenitiesLower::contains);
                 })
+                .sorted(java.util.Comparator.comparing(Pg::getRating, java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
                 .collect(Collectors.toList());
 
-        // Remove mock PGs if real ones exist for that area
-        Map<String, Boolean> areaHasReal = new java.util.HashMap<>();
-        for (Pg pg : filtered) {
-            String key = (pg.getCity() + "|" + pg.getArea()).toLowerCase();
-            boolean isReal = pg.getPlaceId() != null 
-                    && !pg.getPlaceId().startsWith("seed-initial-") 
-                    && !pg.getPlaceId().startsWith("osm-mock-");
-            if (isReal) {
-                areaHasReal.put(key, true);
-            }
-        }
-        
-        filtered = filtered.stream()
-                .filter(pg -> {
-                    String key = (pg.getCity() + "|" + pg.getArea()).toLowerCase();
-                    boolean isMock = pg.getPlaceId() != null 
-                            && (pg.getPlaceId().startsWith("seed-initial-") || pg.getPlaceId().startsWith("osm-mock-"));
-                    return !(isMock && areaHasReal.getOrDefault(key, false));
-                })
-                .collect(Collectors.toList());
-        
+        log.info("Returning {} PGs matching filter criteria (includes premium & standard listings)", filtered.size());
         return ResponseEntity.ok(filtered);
     }
 

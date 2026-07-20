@@ -3,7 +3,6 @@ package com.pgfind.service;
 import com.pgfind.model.Pg;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
@@ -19,45 +18,54 @@ public class GoogleMapsService {
     private static final Logger log = LoggerFactory.getLogger(GoogleMapsService.class);
     private final RestTemplate restTemplate;
 
-    // OpenStreetMap Overpass API — 100% Free, No Key Required
+    // OpenStreetMap Overpass & Nominatim APIs — 100% Free, Dynamic API Integration
     private static final String OVERPASS_URL    = "https://overpass-api.de/api/interpreter";
     private static final String NOMINATIM_URL   = "https://nominatim.openstreetmap.org/search";
-    private static final int    SEARCH_RADIUS_M = 3000; // 3 km radius search
+    private static final int    SEARCH_RADIUS_M = 8000; // 8 km radius API search for full area coverage
 
-    @Value("${osm.sync.mock-mode:false}")
-    private boolean mockMode;
+    private final Map<String, List<String>> areaCache = new java.util.concurrent.ConcurrentHashMap<>();
 
     public GoogleMapsService() {
-        this.restTemplate = new RestTemplate();
+        org.springframework.http.client.SimpleClientHttpRequestFactory factory = new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(3000);
+        factory.setReadTimeout(4000);
+        this.restTemplate = new RestTemplate(factory);
     }
 
     /**
-     * Entry point: search PGs from OpenStreetMap or mock data
+     * Entry point: search real PGs from OpenStreetMap via API
      */
     public List<Pg> searchAndSyncPgs(String city, String area) {
-        log.info("Starting OpenStreetMap sync — City: {}, Area: {} | Mock Mode: {}", city, area, mockMode);
-        if (mockMode) {
-            return generateMockPgs(city, area);
-        }
+        log.info("Starting OpenStreetMap API fetch — City: {}, Area: {}", city, area);
         return fetchFromOpenStreetMap(city, area);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Dynamic area discovery
+    // Dynamic area discovery via API
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Fetch real suburb/neighbourhood names for a city via Nominatim + Overpass.
+     * Fetch real suburb/neighbourhood names for a city dynamically via Nominatim + Overpass APIs.
      */
     @SuppressWarnings("unchecked")
     public List<String> fetchAreasForCity(String city) {
-        log.info("Fetching real areas for city: {}", city);
+        if (city == null || city.isBlank()) return Collections.emptyList();
+        String cityKey = city.trim().toLowerCase();
+        
+        if (areaCache.containsKey(cityKey)) {
+            log.debug("Returning cached areas for city: {}", city);
+            return areaCache.get(cityKey);
+        }
+
+        log.info("Fetching real areas for city via API: {}", city);
         try {
             double[] bbox = getCityBoundingBox(city);
-            if (bbox == null) return getFallbackAreas(city);
+            if (bbox == null) {
+                return Collections.emptyList();
+            }
 
             // bbox = [south, west, north, east]
-            String overpassQuery = "[out:json][timeout:30];\n" +
+            String overpassQuery = "[out:json][timeout:10];\n" +
                     "node[\"place\"~\"suburb|neighbourhood|quarter\"]" +
                     "(" + bbox[0] + "," + bbox[1] + "," + bbox[2] + "," + bbox[3] + ");\n" +
                     "out tags;";
@@ -71,10 +79,14 @@ public class GoogleMapsService {
             HttpEntity<MultiValueMap<String, String>> req = new HttpEntity<>(form, hdr);
 
             ResponseEntity<Map> resp = restTemplate.exchange(OVERPASS_URL, HttpMethod.POST, req, Map.class);
-            if (resp.getBody() == null) return getFallbackAreas(city);
+            if (resp.getBody() == null) {
+                return Collections.emptyList();
+            }
 
             List<Map<String, Object>> elements = (List<Map<String, Object>>) resp.getBody().get("elements");
-            if (elements == null || elements.isEmpty()) return getFallbackAreas(city);
+            if (elements == null || elements.isEmpty()) {
+                return Collections.emptyList();
+            }
 
             List<String> areas = elements.stream()
                     .map(el -> (Map<String, Object>) el.get("tags"))
@@ -88,17 +100,19 @@ public class GoogleMapsService {
                     .sorted()
                     .collect(Collectors.toList());
 
-            if (areas.isEmpty()) return getFallbackAreas(city);
-            log.info("Fetched {} real areas for {}", areas.size(), city);
+            log.info("Fetched {} real areas for {} via API", areas.size(), city);
+            if (!areas.isEmpty()) {
+                areaCache.put(cityKey, areas);
+            }
             return areas;
 
         } catch (Exception e) {
-            log.warn("fetchAreasForCity failed for {}: {}. Using fallback.", city, e.getMessage());
-            return getFallbackAreas(city);
+            log.warn("fetchAreasForCity API call failed for {}: {}", city, e.getMessage());
+            return Collections.emptyList();
         }
     }
 
-    /** Get city bounding box [south, west, north, east] from Nominatim. */
+    /** Get city bounding box [south, west, north, east] from Nominatim API. */
     @SuppressWarnings("unchecked")
     private double[] getCityBoundingBox(String city) {
         try {
@@ -129,30 +143,19 @@ public class GoogleMapsService {
         }
     }
 
-    /** Small static fallback if Nominatim / Overpass unavailable. */
-    private List<String> getFallbackAreas(String city) {
-        if ("Bangalore".equalsIgnoreCase(city)) {
-            return Arrays.asList("BTM Layout", "Electronic City", "HSR Layout",
-                    "Indiranagar", "Koramangala", "Marathahalli", "Whitefield");
-        }
-        return Arrays.asList("Ameerpet", "Banjara Hills", "Gachibowli",
-                "Hitech City", "Kondapur", "Madhapur", "Kukatpally");
-    }
-
     // ─────────────────────────────────────────────────────────────────────────
-    // Nearby PG search (geolocation-based)
+    // Nearby PG search (geolocation-based API)
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Search for PGs near given coordinates using Overpass + reverse geocoding.
+     * Search for PGs near given coordinates using Overpass API
      */
     @SuppressWarnings("unchecked")
     public List<Pg> searchNearbyPgs(double lat, double lon) {
-        log.info("Searching nearby PGs at lat={}, lon={}", lat, lon);
+        log.info("Searching nearby PGs via API at lat={}, lon={}", lat, lon);
         String[] loc = reverseGeocode(lat, lon);
         String city = loc[0];
         String area = loc[1];
-        log.info("Reverse geocoded → {}, {}", area, city);
 
         List<Pg> results = new ArrayList<>();
         try {
@@ -167,10 +170,10 @@ public class GoogleMapsService {
             HttpEntity<MultiValueMap<String, String>> req = new HttpEntity<>(form, hdr);
 
             ResponseEntity<Map> resp = restTemplate.exchange(OVERPASS_URL, HttpMethod.POST, req, Map.class);
-            if (resp.getBody() == null) return generateMockPgs(city, area);
+            if (resp.getBody() == null) return Collections.emptyList();
 
             List<Map<String, Object>> elements = (List<Map<String, Object>>) resp.getBody().get("elements");
-            if (elements == null || elements.isEmpty()) return generateMockPgs(city, area);
+            if (elements == null || elements.isEmpty()) return Collections.emptyList();
 
             Random rnd = new Random();
             int addedCount = 0;
@@ -210,15 +213,15 @@ public class GoogleMapsService {
                 addedCount++;
             }
 
-            return results.isEmpty() ? generateMockPgs(city, area) : results;
+            return results;
 
         } catch (Exception e) {
-            log.error("searchNearbyPgs failed: {}", e.getMessage(), e);
-            return generateMockPgs(city, area);
+            log.error("searchNearbyPgs API fetch failed: {}", e.getMessage(), e);
+            return Collections.emptyList();
         }
     }
 
-    /** Reverse-geocode lat/lon → [city, area] using Nominatim. */
+    /** Reverse-geocode lat/lon → [city, area] using Nominatim API. */
     @SuppressWarnings("unchecked")
     private String[] reverseGeocode(double lat, double lon) {
         try {
@@ -256,7 +259,7 @@ public class GoogleMapsService {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // STEP 1 — Nominatim geocoding: area name → lat/lon
+    // STEP 1 — Nominatim geocoding API: area name → lat/lon
     // ─────────────────────────────────────────────────────────────────────────
     @SuppressWarnings("unchecked")
     private double[] geocodeArea(String area, String city) {
@@ -265,12 +268,11 @@ public class GoogleMapsService {
             String url   = NOMINATIM_URL + "?q=" + query.replace(" ", "+") + "&format=json&limit=1";
 
             HttpHeaders headers = new HttpHeaders();
-            // Nominatim requires a descriptive User-Agent header and Referer to prevent 403s
             headers.set("User-Agent", "PGFindApp-StartupSyncService-v2/2.1 (contact.pgfind.service@gmail.com; developer: nagas)");
             headers.set("Referer", "http://localhost:8080");
             HttpEntity<Void> entity = new HttpEntity<>(headers);
 
-            log.info("Nominatim geocoding: {}", query);
+            log.info("Nominatim geocoding API: {}", query);
             ResponseEntity<List> response = restTemplate.exchange(url, HttpMethod.GET, entity, List.class);
 
             if (response.getBody() != null && !response.getBody().isEmpty()) {
@@ -283,8 +285,7 @@ public class GoogleMapsService {
         } catch (Exception e) {
             log.warn("Nominatim geocoding failed for '{}', {}: {}", area, city, e.getMessage());
         }
-        // Fallback coordinates for major areas if geocoding fails
-        return getFallbackCoordinates(city, area);
+        return null;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -295,10 +296,13 @@ public class GoogleMapsService {
         List<Pg> results = new ArrayList<>();
         try {
             double[] coords = geocodeArea(area, city);
+            if (coords == null) {
+                log.warn("Geocoding failed for {}, {}. Returning empty list.", area, city);
+                return Collections.emptyList();
+            }
             double lat = coords[0];
             double lon = coords[1];
 
-            // Build Overpass QL query — searches multiple accommodation types
             String overpassQuery = buildOverpassQuery(lat, lon);
 
             HttpHeaders headers = new HttpHeaders();
@@ -314,57 +318,49 @@ public class GoogleMapsService {
             ResponseEntity<Map> response = restTemplate.exchange(OVERPASS_URL, HttpMethod.POST, request, Map.class);
             if (response.getBody() == null) {
                 log.warn("Overpass API returned empty body");
-                return generateMockPgs(city, area);
+                return Collections.emptyList();
             }
 
             List<Map<String, Object>> elements = (List<Map<String, Object>>) response.getBody().get("elements");
             if (elements == null || elements.isEmpty()) {
-                log.info("No OSM accommodations found near {}, {} — using mock data as fallback", area, city);
-                return generateMockPgs(city, area);
+                log.info("No OSM accommodations found near {}, {}", area, city);
+                return Collections.emptyList();
             }
 
-            log.info("Overpass returned {} raw OSM elements", elements.size());
+            log.info("Overpass API returned {} raw OSM elements", elements.size());
 
             int addedCount = 0;
             Random rnd = new Random();
             for (Map<String, Object> el : elements) {
-                if (addedCount >= 20) { // cap at 20 named ones per sync
+                if (addedCount >= 30) {
                     break;
                 }
                 Map<String, Object> tags = (Map<String, Object>) el.get("tags");
                 if (tags == null) continue;
 
                 String name = (String) tags.get("name");
-                if (name == null || name.isBlank()) continue; // skip unnamed places
+                if (name == null || name.isBlank()) continue;
 
-                // Build OSM unique Place ID
                 String osmType = (String) el.get("type");
                 Object osmId   = el.get("id");
                 String placeId = "osm-" + osmType + "-" + osmId;
 
-                // Build address from OSM addr:* tags
                 String address = buildAddress(tags, area, city);
-
-                // Infer PG type from name / tags
                 String pgType = inferPgType(name, tags);
 
-                // Generate premium-looking rating: 3.8 to 4.8
                 Double rating = 3.8 + (rnd.nextInt(11) / 10.0);
                 if (tags.get("stars") != null) {
                     try { rating = Double.parseDouble(tags.get("stars").toString()); } catch (Exception ignored) {}
                 }
 
-                // Phone / email from OSM tags
                 String phone = getTag(tags, "phone", "contact:phone", "contact:mobile");
                 String email = getTag(tags, "email", "contact:email");
                 if (phone == null) phone = "+91 9" + (100000000 + rnd.nextInt(899999999));
                 if (email == null) email = name.toLowerCase().replaceAll("[^a-z0-9]", "") + "@pgfind.com";
 
-                // Generate premium randomized pricing based on area
                 Double basePrice = estimatePrice(city, area);
                 Double price = basePrice + (rnd.nextInt(5) * 500) - 1000;
 
-                // Set varied sharing options
                 List<String> sharingOptions = new ArrayList<>();
                 int sharingType = rnd.nextInt(3);
                 if (sharingType == 0) {
@@ -375,7 +371,6 @@ public class GoogleMapsService {
                     sharingOptions.addAll(Arrays.asList("Single", "Double", "Triple"));
                 }
 
-                // Dynamic, premium amenities distribution
                 List<String> amenities = new ArrayList<>(Arrays.asList("Wi-Fi", "Power Backup", "Security", "Housekeeping"));
                 if (rnd.nextBoolean()) amenities.add("Food");
                 if (rnd.nextBoolean()) amenities.add("AC");
@@ -399,51 +394,25 @@ public class GoogleMapsService {
                 addedCount++;
             }
 
-            log.info("Mapped {} valid PG listings from OpenStreetMap data", results.size());
+            log.info("Mapped {} valid PG listings from OpenStreetMap API data", results.size());
+            return results;
 
         } catch (Exception e) {
             log.error("Overpass API fetch failed: {}", e.getMessage(), e);
-            log.info("Falling back to mock data");
-            return generateMockPgs(city, area);
+            return Collections.emptyList();
         }
-
-        // If OSM returned elements but none had names, use mock fallback
-        if (results.isEmpty()) {
-            log.info("All OSM elements lacked names — using mock data fallback");
-            return generateMockPgs(city, area);
-        }
-        return results;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    private static final String[] GIRLS_IMAGES = {
-        "https://images.unsplash.com/photo-1560185007-c5ca9d2c014d?auto=format&fit=crop&w=800&q=80",
-        "https://images.unsplash.com/photo-1595526114035-0d45ed16cfbf?auto=format&fit=crop&w=800&q=80",
-        "https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?auto=format&fit=crop&w=800&q=80"
-    };
-    private static final String[] BOYS_IMAGES = {
-        "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&w=800&q=80",
-        "https://images.unsplash.com/photo-1505691938895-1758d7feb511?auto=format&fit=crop&w=800&q=80",
-        "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80"
-    };
-    private static final String[] COLIVING_IMAGES = {
-        "https://images.unsplash.com/photo-1554995207-c18c203602cb?auto=format&fit=crop&w=800&q=80",
-        "https://images.unsplash.com/photo-1598928506311-c55ded91a20c?auto=format&fit=crop&w=800&q=80",
-        "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80"
-    };
-
     private String getImageByType(String pgType, Random rnd) {
-        String[] pool;
-        if ("Girls".equals(pgType)) {
-            pool = GIRLS_IMAGES;
-        } else if ("Boys".equals(pgType)) {
-            pool = BOYS_IMAGES;
-        } else {
-            pool = COLIVING_IMAGES;
-        }
+        String[] pool = {
+            "https://images.unsplash.com/photo-1554995207-c18c203602cb?auto=format&fit=crop&w=800&q=80",
+            "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&w=800&q=80",
+            "https://images.unsplash.com/photo-1560185007-c5ca9d2c014d?auto=format&fit=crop&w=800&q=80"
+        };
         return pool[rnd.nextInt(pool.length)];
     }
 
@@ -506,102 +475,5 @@ public class GoogleMapsService {
             areaL.contains("indiranagar") || areaL.contains("whitefield") ||
             areaL.contains("koramangala")) base += 3000.0;
         return base;
-    }
-
-    /** Hardcoded fallback coordinates for all 32 areas if Nominatim is unavailable or rate-limited */
-    private double[] getFallbackCoordinates(String city, String area) {
-        Map<String, double[]> coords = new HashMap<>();
-        
-        // Hyderabad areas
-        coords.put("madhapur",           new double[]{17.4435, 78.3772});
-        coords.put("gachibowli",         new double[]{17.4401, 78.3489});
-        coords.put("hitech city",        new double[]{17.4486, 78.3908});
-        coords.put("hitech",             new double[]{17.4486, 78.3908});
-        coords.put("kondapur",           new double[]{17.4592, 78.3615});
-        coords.put("banjara hills",      new double[]{17.4176, 78.4419});
-        coords.put("jubilee hills",      new double[]{17.4326, 78.4071});
-        coords.put("kukatpally",         new double[]{17.4875, 78.3953});
-        coords.put("ameerpet",           new double[]{17.4375, 78.4483});
-        coords.put("kphb colony",        new double[]{17.4837, 78.3883});
-        coords.put("kphb",               new double[]{17.4837, 78.3883});
-        coords.put("miyapur",            new double[]{17.4966, 78.3498});
-        coords.put("financial district", new double[]{17.4184, 78.3431});
-        coords.put("manikonda",          new double[]{17.4018, 78.3653});
-        coords.put("begumpet",           new double[]{17.4447, 78.4664});
-        coords.put("secunderabad",       new double[]{17.4399, 78.4983});
-        coords.put("mehdipatnam",        new double[]{17.3916, 78.4400});
-        coords.put("nallagandla",        new double[]{17.4727, 78.3071});
-        
-        // Bangalore areas
-        coords.put("koramangala",        new double[]{12.9352, 77.6245});
-        coords.put("indiranagar",        new double[]{12.9784, 77.6408});
-        coords.put("hsr layout",         new double[]{12.9116, 77.6389});
-        coords.put("hsr",                new double[]{12.9116, 77.6389});
-        coords.put("whitefield",         new double[]{12.9698, 77.7499});
-        coords.put("btm layout",         new double[]{12.9166, 77.6101});
-        coords.put("btm",                new double[]{12.9166, 77.6101});
-        coords.put("electronic city",    new double[]{12.8452, 77.6602});
-        coords.put("marathahalli",       new double[]{12.9569, 77.7011});
-        coords.put("jayanagar",          new double[]{12.9308, 77.5838});
-        coords.put("jp nagar",           new double[]{12.9079, 77.5858});
-        coords.put("bellandur",          new double[]{12.9299, 77.6830});
-        coords.put("sarjapur road",      new double[]{12.9105, 77.6845});
-        coords.put("sarjapur",           new double[]{12.9105, 77.6845});
-        coords.put("hebbal",             new double[]{13.0354, 77.5988});
-        coords.put("yelahanka",          new double[]{13.1007, 77.5963});
-        coords.put("rajajinagar",        new double[]{12.9896, 77.5550});
-        coords.put("malleshwaram",       new double[]{13.0031, 77.5696});
-        coords.put("domlur",             new double[]{12.9610, 77.6387});
-
-        String key = area.toLowerCase().trim();
-        if (coords.containsKey(key)) return coords.get(key);
-
-        // Default city center fallback
-        if ("Bangalore".equalsIgnoreCase(city)) return new double[]{12.9716, 77.5946};
-        return new double[]{17.3850, 78.4867}; // Hyderabad center
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Mock data generator (used when osm.sync.mock-mode=true)
-    // ─────────────────────────────────────────────────────────────────────────
-    private List<Pg> generateMockPgs(String city, String area) {
-        log.info("Generating mock PG listings for {}, {}", area, city);
-        List<Pg> mock = new ArrayList<>();
-        Random rnd = new Random();
-
-        String[][] entries = {
-            {"Zolo " + area + " Premium Stay",          "Coliving"},
-            {"Stanza Living " + area + " House",         "Boys"},
-            {"Sree Durga Girls PG " + area,              "Girls"},
-        };
-
-        String[] images = {
-            "https://images.unsplash.com/photo-1554995207-c18c203602cb?auto=format&fit=crop&w=800&q=80",
-            "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&w=800&q=80",
-            "https://images.unsplash.com/photo-1560185007-c5ca9d2c014d?auto=format&fit=crop&w=800&q=80",
-        };
-
-        for (int i = 0; i < entries.length; i++) {
-            String name   = entries[i][0];
-            String pgType = entries[i][1];
-            String placeId = "osm-mock-" + city.toLowerCase() + "-" + area.toLowerCase() + "-" + i;
-
-            mock.add(new Pg(
-                null, name, city, area,
-                "Plot " + (rnd.nextInt(200) + 1) + ", Main Road, " + area + ", " + city,
-                pgType,
-                Arrays.asList("Single", "Double"),
-                estimatePrice(city, area) - (i * 1000.0),
-                Arrays.asList("Wi-Fi", "Power Backup", "Security", "Washing Machine", "Housekeeping"),
-                "+91 9" + (100000000 + rnd.nextInt(899999999)),
-                name.toLowerCase().replaceAll("[^a-z0-9]", "") + "@pgfind.com",
-                4.0 + (rnd.nextInt(10) / 10.0),
-                images[i],
-                name + " is a well-maintained stay in " + area + ", " + city +
-                " ideal for working professionals. (Mock listing — enable real sync with osm.sync.mock-mode=false)",
-                placeId
-            ));
-        }
-        return mock;
     }
 }
