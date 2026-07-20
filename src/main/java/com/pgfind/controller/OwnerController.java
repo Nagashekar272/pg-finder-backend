@@ -14,7 +14,6 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @RestController
 @RequestMapping("/api/owner")
-@CrossOrigin(origins = "*")
 public class OwnerController {
 
     private static final Logger log = LoggerFactory.getLogger(OwnerController.class);
