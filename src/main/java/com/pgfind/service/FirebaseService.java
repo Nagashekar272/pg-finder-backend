@@ -162,6 +162,54 @@ public class FirebaseService {
             "https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?auto=format&fit=crop&w=800&q=80",
             "Directly opposite Prestige Shantiniketan, this coliving space is custom built for Whitefield IT professionals. Walk to work while enjoying high-end community spaces, biometric security, dedicated workstation areas, high-speed internet, fitness center, and regular social events."
         ));
+        fallbackDb.add(new Pg(
+            "fb-9",
+            "Sri Vigneswara Luxury Boys PG",
+            "Hyderabad",
+            "Kukatpally",
+            "Road No 1, Near KPHB Metro Station, Kukatpally, Hyderabad - 500072",
+            "Boys",
+            Arrays.asList("Single", "Double", "Triple", "Four Sharing"),
+            6500.0,
+            Arrays.asList("Wi-Fi", "Food", "Power Backup", "Geyser", "Parking", "Security", "Washing Machine", "Housekeeping", "TV"),
+            "+91 9440123456",
+            "srivigneswarapg@gmail.com",
+            4.7,
+            "https://images.unsplash.com/photo-1505691938895-1758d7feb511?auto=format&fit=crop&w=800&q=80",
+            "Sri Vigneswara Luxury Boys PG offers clean, spacious, and highly comfortable living for students and working professionals in Kukatpally / KPHB. Located close to Metro stations and IT hubs, providing 3 daily delicious meals, high-speed Wi-Fi, 24/7 hot water, power backup, and regular maintenance."
+        ));
+        fallbackDb.add(new Pg(
+            "fb-10",
+            "Sri Vigneswara Executive Boys PG",
+            "Hyderabad",
+            "Ameerpet",
+            "Flat 202, Opp. Maitrivanam, Ameerpet, Hyderabad - 500038",
+            "Boys",
+            Arrays.asList("Double", "Triple", "Four Sharing"),
+            6000.0,
+            Arrays.asList("Wi-Fi", "Food", "Power Backup", "Geyser", "Security", "Washing Machine", "Housekeeping"),
+            "+91 9848012345",
+            "srivigneswara.ameerpet@gmail.com",
+            4.5,
+            "https://images.unsplash.com/photo-1616486338812-3dadae4b4ace?auto=format&fit=crop&w=800&q=80",
+            "Sri Vigneswara Executive Boys PG in Ameerpet is ideal for software trainees, job seekers, and students. Conveniently located near major coaching centers and Metro station, offering nutritious food, high-speed internet, and 24/7 security."
+        ));
+        fallbackDb.add(new Pg(
+            "fb-11",
+            "Sri Vigneswara Deluxe Boys PG",
+            "Hyderabad",
+            "Madhapur",
+            "Near Cyber Towers, Madhapur, Hyderabad - 500081",
+            "Boys",
+            Arrays.asList("Single", "Double", "Triple"),
+            7500.0,
+            Arrays.asList("Wi-Fi", "AC", "Food", "Power Backup", "Geyser", "Parking", "Security", "Washing Machine", "Housekeeping", "TV"),
+            "+91 9100098765",
+            "srivigneswara.madhapur@gmail.com",
+            4.6,
+            "https://images.unsplash.com/photo-1522771739844-6a9f6d5f14af?auto=format&fit=crop&w=800&q=80",
+            "Sri Vigneswara Deluxe Boys PG in Madhapur offers premium luxury rooms with AC, attached bathrooms, LED TV, high-speed Wi-Fi, and tasty South & North Indian food for IT professionals working in Hitech City and Mindspace."
+        ));
     }
 
     private String getPgsUrl() {
@@ -172,13 +220,33 @@ public class FirebaseService {
         return databaseUrl + "/pgs/" + id + ".json";
     }
 
+    private List<Pg> cachedPgs = null;
+    private long lastCacheTime = 0;
+    private static final long CACHE_TTL_MS = 30000; // 30 seconds cache
+
     /**
-     * Fetch all PGs from Firebase
+     * Invalidate the in-memory PG cache
      */
-    public List<Pg> getAllPgs() {
+    public synchronized void invalidateCache() {
+        cachedPgs = null;
+        lastCacheTime = 0;
+    }
+
+    /**
+     * Fetch all PGs from Firebase (with short in-memory TTL caching)
+     */
+    public synchronized List<Pg> getAllPgs() {
+        long now = System.currentTimeMillis();
+        if (cachedPgs != null && (now - lastCacheTime) < CACHE_TTL_MS) {
+            log.debug("Returning cached PGs list ({} items)", cachedPgs.size());
+            return new ArrayList<>(cachedPgs);
+        }
+
         if (useFallback) {
             log.debug("Using local fallback database to fetch all listings");
-            return fallbackDb;
+            cachedPgs = new ArrayList<>(fallbackDb);
+            lastCacheTime = now;
+            return new ArrayList<>(cachedPgs);
         }
 
         try {
@@ -193,24 +261,39 @@ public class FirebaseService {
                     url, HttpMethod.GET, null, responseType);
             
             Map<String, Pg> pgsMap = response.getBody();
-            if (pgsMap == null || pgsMap.isEmpty()) {
-                log.info("No PGs found in Firebase database.");
-                return new ArrayList<>();
-            }
-            
             List<Pg> pgsList = new ArrayList<>();
-            for (Map.Entry<String, Pg> entry : pgsMap.entrySet()) {
-                Pg pg = entry.getValue();
-                if (pg != null) {
-                    pg.setId(entry.getKey()); // Set the ID as the Firebase database key
-                    pgsList.add(pg);
+            if (pgsMap != null && !pgsMap.isEmpty()) {
+                for (Map.Entry<String, Pg> entry : pgsMap.entrySet()) {
+                    Pg pg = entry.getValue();
+                    if (pg != null) {
+                        pg.setId(entry.getKey()); // Set the ID as the Firebase database key
+                        pgsList.add(pg);
+                    }
+                }
+            } else {
+                log.info("No PGs found in Firebase database.");
+            }
+
+            // Always merge fallbackDb so seeded PGs (like Sri Vigneswara Boys PG) are guaranteed to be present
+            for (Pg fbPg : fallbackDb) {
+                boolean exists = pgsList.stream().anyMatch(p -> 
+                    (p.getId() != null && p.getId().equalsIgnoreCase(fbPg.getId())) || 
+                    (p.getName() != null && p.getName().equalsIgnoreCase(fbPg.getName()))
+                );
+                if (!exists) {
+                    pgsList.add(fbPg);
                 }
             }
-            return pgsList;
+
+            cachedPgs = pgsList;
+            lastCacheTime = now;
+            return new ArrayList<>(cachedPgs);
         } catch (Exception e) {
             log.warn("Firebase query failed. Switching to in-memory fallback database. Error: {}", e.getMessage());
             useFallback = true;
-            return fallbackDb;
+            cachedPgs = new ArrayList<>(fallbackDb);
+            lastCacheTime = now;
+            return new ArrayList<>(cachedPgs);
         }
     }
 
@@ -248,6 +331,7 @@ public class FirebaseService {
      * Add a new PG to Firebase
      */
     public Pg addPg(Pg pg) {
+        invalidateCache();
         if (useFallback) {
             log.debug("Adding new PG to local fallback database");
             String generatedId = "fb-" + UUID.randomUUID().toString();
@@ -292,6 +376,7 @@ public class FirebaseService {
      * Delete a PG by its ID from Firebase (and local fallback cache)
      */
     public void deletePg(String id) {
+        invalidateCache();
         // Always remove from local cache
         fallbackDb.removeIf(p -> id.equals(p.getId()));
 
@@ -334,17 +419,28 @@ public class FirebaseService {
     }
 
     /**
-     * Sync a list of PGs from Google Maps — skips duplicates by placeId
+     * Sync a list of PGs from Google Maps — skips duplicates by placeId efficiently
      * @return count of newly added PGs
      */
     public int syncGoogleMapsPgs(List<Pg> googlePgs) {
+        if (googlePgs == null || googlePgs.isEmpty()) return 0;
+        
+        // Fetch existing place IDs ONCE to avoid N+1 network requests
+        Set<String> existingPlaceIds = getAllPgs().stream()
+                .map(Pg::getPlaceId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
         int added = 0;
         for (Pg pg : googlePgs) {
-            if (pg.getPlaceId() != null && existsByPlaceId(pg.getPlaceId())) {
-                log.info("Skipping duplicate Google Maps place: {} (placeId: {})", pg.getName(), pg.getPlaceId());
+            if (pg.getPlaceId() != null && existingPlaceIds.contains(pg.getPlaceId())) {
+                log.debug("Skipping duplicate Google Maps place: {} (placeId: {})", pg.getName(), pg.getPlaceId());
                 continue;
             }
             addPg(pg);
+            if (pg.getPlaceId() != null) {
+                existingPlaceIds.add(pg.getPlaceId());
+            }
             log.info("Synced new PG from Google Maps: {}", pg.getName());
             added++;
         }
