@@ -44,24 +44,33 @@ public class PgController {
         final String cleanArea = (area != null) ? area.trim() : "";
         final String cleanType = (type != null) ? type.trim() : "";
 
-        // Trigger automatic sync if city and area are present and no synced PGs exist for this area in Firebase
-        if (!cleanCity.isBlank() && !cleanArea.isBlank()) {
+        // Trigger automatic sync if city is provided, or if Firebase is completely empty
+        List<Pg> currentPgs = firebaseService.getAllPgs();
+        if (currentPgs.isEmpty()) {
+            log.info("Firebase contains 0 PGs. Performing initial API sync for Hyderabad & Bangalore...");
             try {
-                List<Pg> currentPgs = firebaseService.getAllPgs();
-                boolean hasSyncedPgs = currentPgs.stream()
-                        .filter(p -> p.getCity() != null && cleanCity.equalsIgnoreCase(p.getCity()))
-                        .anyMatch(p -> p.getArea() != null && p.getArea().toLowerCase().contains(cleanArea.toLowerCase()));
-                
-                if (!hasSyncedPgs) {
-                    log.info("Fetching real PGs via API for {}, {} and persisting to Firebase database...", cleanArea, cleanCity);
-                    List<Pg> synced = googleMapsService.searchAndSyncPgs(cleanCity, cleanArea);
+                List<Pg> syncedHyd = googleMapsService.searchAndSyncPgs("Hyderabad", "Kukatpally");
+                firebaseService.syncGoogleMapsPgs(syncedHyd);
+                List<Pg> syncedBlr = googleMapsService.searchAndSyncPgs("Bangalore", "Koramangala");
+                firebaseService.syncGoogleMapsPgs(syncedBlr);
+            } catch (Exception e) {
+                log.error("Initial empty database sync failed: {}", e.getMessage());
+            }
+        } else if (!cleanCity.isBlank()) {
+            String targetArea = !cleanArea.isBlank() ? cleanArea : ("Hyderabad".equalsIgnoreCase(cleanCity) ? "Kukatpally" : "Koramangala");
+            boolean hasSyncedPgs = currentPgs.stream()
+                    .anyMatch(p -> p.getCity() != null && cleanCity.equalsIgnoreCase(p.getCity()));
+            if (!hasSyncedPgs) {
+                log.info("Fetching real PGs via API for city {}, area {} and persisting to Firebase database...", cleanCity, targetArea);
+                try {
+                    List<Pg> synced = googleMapsService.searchAndSyncPgs(cleanCity, targetArea);
                     if (synced != null && !synced.isEmpty()) {
                         int addedCount = firebaseService.syncGoogleMapsPgs(synced);
-                        log.info("Persisted {} new PGs to Firebase database", addedCount);
+                        log.info("Persisted {} new PGs to Firebase database for {}", addedCount, cleanCity);
                     }
+                } catch (Exception e) {
+                    log.error("Automatic sync failed for city {}: {}", cleanCity, e.getMessage());
                 }
-            } catch (Exception e) {
-                log.error("Automatic sync failed for {}, {}: {}", cleanArea, cleanCity, e.getMessage());
             }
         }
         
