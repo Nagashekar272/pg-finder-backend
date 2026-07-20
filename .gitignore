@@ -52,7 +52,10 @@ Thumbs.db
 # ============================
 firebase-service-account.json
 serviceAccountKey.json
+serviceaccount.json
 google-services.json
+*-firebase-adminsdk-*.json
+*service-account*.json
 
 # ============================
 # Logs
