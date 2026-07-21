@@ -19,6 +19,14 @@ public class Pg {
     private String imageUrl;
     private String description;
     private String placeId; // Reference to Google Maps Place ID
+    private Double latitude;
+    private Double longitude;
+    private Integer totalRatings;
+    private List<String> photos = new ArrayList<>();
+    private String website;
+    private String businessStatus;
+    private String openingStatus;
+    private Boolean openNow;
 
     // Constructors
     public Pg() {
@@ -171,6 +179,70 @@ public class Pg {
         this.placeId = placeId;
     }
 
+    public Double getLatitude() {
+        return latitude;
+    }
+
+    public void setLatitude(Double latitude) {
+        this.latitude = latitude;
+    }
+
+    public Double getLongitude() {
+        return longitude;
+    }
+
+    public void setLongitude(Double longitude) {
+        this.longitude = longitude;
+    }
+
+    public Integer getTotalRatings() {
+        return totalRatings;
+    }
+
+    public void setTotalRatings(Integer totalRatings) {
+        this.totalRatings = totalRatings;
+    }
+
+    public List<String> getPhotos() {
+        return photos;
+    }
+
+    public void setPhotos(List<String> photos) {
+        this.photos = photos;
+    }
+
+    public String getWebsite() {
+        return website;
+    }
+
+    public void setWebsite(String website) {
+        this.website = website;
+    }
+
+    public String getBusinessStatus() {
+        return businessStatus;
+    }
+
+    public void setBusinessStatus(String businessStatus) {
+        this.businessStatus = businessStatus;
+    }
+
+    public String getOpeningStatus() {
+        return openingStatus;
+    }
+
+    public void setOpeningStatus(String openingStatus) {
+        this.openingStatus = openingStatus;
+    }
+
+    public Boolean getOpenNow() {
+        return openNow;
+    }
+
+    public void setOpenNow(Boolean openNow) {
+        this.openNow = openNow;
+    }
+
     @Override
     public String toString() {
         return "Pg{" +
@@ -182,6 +254,15 @@ public class Pg {
                 ", pgType='" + pgType + '\'' +
                 ", startingPrice=" + startingPrice +
                 ", contactNumber='" + contactNumber + '\'' +
+                ", rating=" + rating +
+                ", placeId='" + placeId + '\'' +
+                ", latitude=" + latitude +
+                ", longitude=" + longitude +
+                ", totalRatings=" + totalRatings +
+                ", website='" + website + '\'' +
+                ", businessStatus='" + businessStatus + '\'' +
+                ", openingStatus='" + openingStatus + '\'' +
+                ", openNow=" + openNow +
                 '}';
     }
 }

@@ -232,6 +232,19 @@ public class FirebaseService {
             List<String> amenities = (List<String>) doc.get("amenities");
             pg.setAmenities(amenities != null ? amenities : new ArrayList<>());
 
+            // New Google Places API fields
+            pg.setLatitude(doc.getDouble("latitude"));
+            pg.setLongitude(doc.getDouble("longitude"));
+            Long totalRatingsVal = doc.getLong("totalRatings");
+            pg.setTotalRatings(totalRatingsVal != null ? totalRatingsVal.intValue() : null);
+            pg.setWebsite(doc.getString("website"));
+            pg.setBusinessStatus(doc.getString("businessStatus"));
+            pg.setOpeningStatus(doc.getString("openingStatus"));
+            pg.setOpenNow(doc.getBoolean("openNow"));
+            @SuppressWarnings("unchecked")
+            List<String> photos = (List<String>) doc.get("photos");
+            pg.setPhotos(photos != null ? photos : new ArrayList<>());
+
             return pg;
         } catch (Exception e) {
             log.warn("Failed to parse Firestore document {}: {}", doc.getId(), e.getMessage());
@@ -255,6 +268,16 @@ public class FirebaseService {
         map.put("imageUrl",       pg.getImageUrl());
         map.put("description",    pg.getDescription());
         map.put("placeId",        pg.getPlaceId());
+
+        // New Google Places API fields
+        map.put("latitude",       pg.getLatitude());
+        map.put("longitude",      pg.getLongitude());
+        map.put("totalRatings",   pg.getTotalRatings());
+        map.put("photos",         pg.getPhotos() != null ? pg.getPhotos() : new ArrayList<>());
+        map.put("website",        pg.getWebsite());
+        map.put("businessStatus", pg.getBusinessStatus());
+        map.put("openingStatus",  pg.getOpeningStatus());
+        map.put("openNow",        pg.getOpenNow());
         return map;
     }
 }
